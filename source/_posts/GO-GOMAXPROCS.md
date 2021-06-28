@@ -6,7 +6,5 @@ categories: GO
 comments: true
 ---
 
-GOMAXPROCS
-
 GOMAXPROCS: GO Runtime Scheduler 中 Processor 的数量, 默认值是: CPU 核心数;
 
