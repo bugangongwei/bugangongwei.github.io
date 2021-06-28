@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"example.com","root":"/","scheme":"Muse","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"mac"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
+  </script>
+
+  <meta name="description" content="Linux 进程&#x2F;线程调度器的演进, draveness 《系统设计精要》读书笔记 (1) 初始调度器 · v0.01 ~ v2.4Linux 中, 无论是线程还是进程, 都由一个统一的结构体 task_struct 表示, 该结构定义在 includes&#x2F;sched.h 中: kernel&#x2F;sched.h12345678910111213141516171819202122232425">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Linux task_struct Scheduler">
+<meta property="og:url" content="http://example.com/2021/05/27/Linux-task-struct-Scheduler/index.html">
+<meta property="og:site_name" content="bugangongwei">
+<meta property="og:description" content="Linux 进程&#x2F;线程调度器的演进, draveness 《系统设计精要》读书笔记 (1) 初始调度器 · v0.01 ~ v2.4Linux 中, 无论是线程还是进程, 都由一个统一的结构体 task_struct 表示, 该结构定义在 includes&#x2F;sched.h 中: kernel&#x2F;sched.h12345678910111213141516171819202122232425">
+<meta property="og:locale">
+<meta property="article:published_time" content="2021-05-27T07:23:51.000Z">
+<meta property="article:modified_time" content="2021-05-27T12:18:20.977Z">
+<meta property="article:author" content="Bu Gong">
+<meta property="article:tag" content="调度器">
+<meta property="article:tag" content="源码解析">
+<meta property="article:tag" content="draveness">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="http://example.com/2021/05/27/Linux-task-struct-Scheduler/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh'
+  };
+</script>
+
+  <title>Linux task_struct Scheduler | bugangongwei</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="Toggle navigation bar">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">bugangongwei</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>Home</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>Tags</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>Categories</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>Archives</a>
+
+  </li>
+  </ul>
+</nav>
+
+
+
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2021/05/27/Linux-task-struct-Scheduler/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="Bu Gong">
+      <meta itemprop="description" content="一个柔弱不能自理的女子">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="bugangongwei">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Linux task_struct Scheduler
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">Posted on</span>
+              
+
+              <time title="Created: 2021-05-27 15:23:51 / Modified: 20:18:20" itemprop="dateCreated datePublished" datetime="2021-05-27T15:23:51+08:00">2021-05-27</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">In</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Linux/" itemprop="url" rel="index"><span itemprop="name">Linux</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>Linux 进程/线程调度器的演进, draveness 《系统设计精要》读书笔记</p>
+<h3 id="1-初始调度器-·-v0-01-v2-4"><a href="#1-初始调度器-·-v0-01-v2-4" class="headerlink" title="(1) 初始调度器 · v0.01 ~ v2.4"></a>(1) 初始调度器 · v0.01 ~ v2.4</h3><p>Linux 中, 无论是线程还是进程, 都由一个统一的结构体 task_struct 表示, 该结构定义在 <a href="https://github.com/draveness/linux-archive/blob/master/0.01/include/linux/sched.h#L77" title="" target="">includes&#x2F;sched.h</a> 中:</p>
+<figure class="highlight c"><figcaption><span>kernel/sched.h</span></figcaption><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line"><span class="comment">/* these are hardcoded - don&#x27;t touch */</span></span><br><span class="line">  <span class="keyword">long</span> state; <span class="comment">/* -1 unrunnable, 0 runnable, &gt;0 stopped */</span></span><br><span class="line">  <span class="keyword">long</span> counter;</span><br><span class="line">  <span class="keyword">long</span> priority;</span><br><span class="line">  <span class="keyword">long</span> signal;</span><br><span class="line">  fn_ptr sig_restorer;</span><br><span class="line">  fn_ptr sig_fn[<span class="number">32</span>];</span><br><span class="line"><span class="comment">/* various fields */</span></span><br><span class="line">  <span class="keyword">int</span> exit_code;</span><br><span class="line">  <span class="keyword">unsigned</span> <span class="keyword">long</span> end_code,end_data,brk,start_stack;</span><br><span class="line">  <span class="keyword">long</span> pid,father,pgrp,session,leader;</span><br><span class="line">  <span class="keyword">unsigned</span> <span class="keyword">short</span> uid,euid,suid;</span><br><span class="line">  <span class="keyword">unsigned</span> <span class="keyword">short</span> gid,egid,sgid;</span><br><span class="line">  <span class="keyword">long</span> alarm;</span><br><span class="line">  <span class="keyword">long</span> utime,stime,cutime,cstime,start_time;</span><br><span class="line">  <span class="keyword">unsigned</span> <span class="keyword">short</span> used_math;</span><br><span class="line"><span class="comment">/* file system info */</span></span><br><span class="line">  <span class="keyword">int</span> tty;    <span class="comment">/* -1 if no tty, so it must be signed */</span></span><br><span class="line">  <span class="keyword">unsigned</span> <span class="keyword">short</span> umask;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">m_inode</span> * <span class="title">pwd</span>;</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">m_inode</span> * <span class="title">root</span>;</span></span><br><span class="line">  <span class="keyword">unsigned</span> <span class="keyword">long</span> close_on_exec;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">file</span> * <span class="title">filp</span>[<span class="title">NR_OPEN</span>];</span></span><br><span class="line"><span class="comment">/* ldt for this task 0 - zero 1 - cs 2 - ds&amp;ss */</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">desc_struct</span> <span class="title">ldt</span>[3];</span></span><br><span class="line"><span class="comment">/* tss for this task */</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">tss_struct</span> <span class="title">tss</span>;</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+
+<p>调度器的核心逻辑由 <a href="https://github.com/draveness/linux-archive/blob/master/0.01/kernel/sched.c#L68" title="" target="">kernel&#x2F;sched.c</a> 中的 schedule() 函数定义;</p>
+<figure class="highlight c"><figcaption><span>kernel/sched.c</span></figcaption><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> *  &#x27;schedule()&#x27; is the scheduler function. This is GOOD CODE! There</span></span><br><span class="line"><span class="comment"> * probably won&#x27;t be any reason to change this, as it should work well</span></span><br><span class="line"><span class="comment"> * in all circumstances (ie gives IO-bound processes good response etc).</span></span><br><span class="line"><span class="comment"> * The one thing you might take a look at is the signal-handler code here.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> *   NOTE!!  Task 0 is the &#x27;idle&#x27; task, which gets called when no other</span></span><br><span class="line"><span class="comment"> * tasks can run. It can not be killed, and it cannot sleep. The &#x27;state&#x27;</span></span><br><span class="line"><span class="comment"> * information in task[0] is never used.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">schedule</span><span class="params">(<span class="keyword">void</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">  <span class="keyword">int</span> i,next,c;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> ** <span class="title">p</span>;</span></span><br><span class="line"><span class="comment">/* check alarm, wake up any interruptible tasks that have got a signal */</span></span><br><span class="line">  <span class="keyword">for</span>(p = &amp;LAST_TASK ; p &gt; &amp;FIRST_TASK ; --p)</span><br><span class="line">    <span class="keyword">if</span> (*p) &#123;</span><br><span class="line">      <span class="keyword">if</span> ((*p)-&gt;alarm &amp;&amp; (*p)-&gt;alarm &lt; jiffies) &#123;</span><br><span class="line">          (*p)-&gt;signal |= (<span class="number">1</span>&lt;&lt;(SIGALRM<span class="number">-1</span>));</span><br><span class="line">          (*p)-&gt;alarm = <span class="number">0</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">      <span class="comment">/* 唤醒获得信号的可中断进程 */</span></span><br><span class="line">      <span class="keyword">if</span> ((*p)-&gt;signal &amp;&amp; (*p)-&gt;state==TASK_INTERRUPTIBLE)</span><br><span class="line">        (*p)-&gt;state=TASK_RUNNING;</span><br><span class="line">    &#125;</span><br><span class="line"><span class="comment">/* this is the scheduler proper: */</span></span><br><span class="line">  <span class="keyword">while</span> (<span class="number">1</span>) &#123;</span><br><span class="line">    c = <span class="number">-1</span>;</span><br><span class="line">    next = <span class="number">0</span>;</span><br><span class="line">    <span class="comment">/* NR_TASKS = 64, 该版本的调度器, 任务队列的长度限制为 64 */</span></span><br><span class="line">    i = NR_TASKS;</span><br><span class="line">    p = &amp;task[NR_TASKS];</span><br><span class="line">    <span class="keyword">while</span> (--i) &#123;</span><br><span class="line">      <span class="keyword">if</span> (!*--p)</span><br><span class="line">        <span class="keyword">continue</span>;</span><br><span class="line">      <span class="comment">/* </span></span><br><span class="line"><span class="comment">       * 从后往前遍历任务队列, 找到 counter 最大的可执行进程</span></span><br><span class="line"><span class="comment">       * counter 表示进程目前可占用的时间片数量</span></span><br><span class="line"><span class="comment">       */</span></span><br><span class="line">      <span class="keyword">if</span> ((*p)-&gt;state == TASK_RUNNING &amp;&amp; (*p)-&gt;counter &gt; c)</span><br><span class="line">        c = (*p)-&gt;counter, next = i;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">/* 如果 max counter &gt; 0 , 表明队列中存在还没用完时间片的任务, 则跳出循环, 执行 switch_to(next) 切换进程并分配资源 */</span></span><br><span class="line">    <span class="keyword">if</span> (c) <span class="keyword">break</span>;</span><br><span class="line">    <span class="comment">/* 如果 max counter == 0, 表明队列中的所有任务都没有可用的时间片, 此时, 对所有任务都分配时间片 */</span></span><br><span class="line">    <span class="keyword">for</span>(p = &amp;LAST_TASK ; p &gt; &amp;FIRST_TASK ; --p)</span><br><span class="line">      <span class="keyword">if</span> (*p)</span><br><span class="line">        (*p)-&gt;counter = ((*p)-&gt;counter &gt;&gt; <span class="number">1</span>) +</span><br><span class="line">            (*p)-&gt;priority;</span><br><span class="line">  &#125;</span><br><span class="line">  switch_to(next);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>Linux 操作系统的计时器会每隔 10ms 触发一次 do_timer 将当前正在运行进程的 counter 减一，当前进程的计数器归零时就会重新触发调度。</p>
+<figure class="highlight c"><figcaption><span>kernel/sched.c</span></figcaption><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">do_timer</span><span class="params">(<span class="keyword">long</span> cpl)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">  <span class="keyword">if</span> (cpl)</span><br><span class="line">    current-&gt;utime++;</span><br><span class="line">  <span class="keyword">else</span></span><br><span class="line">    current-&gt;stime++;</span><br><span class="line">  <span class="keyword">if</span> ((--current-&gt;counter)&gt;<span class="number">0</span>) <span class="keyword">return</span>;</span><br><span class="line">  current-&gt;counter=<span class="number">0</span>;</span><br><span class="line">  <span class="keyword">if</span> (!cpl) <span class="keyword">return</span>;</span><br><span class="line">  schedule();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+    </div>
+
+    
+    
+    
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/%E8%B0%83%E5%BA%A6%E5%99%A8/" rel="tag"># 调度器</a>
+              <a href="/tags/%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" rel="tag"># 源码解析</a>
+              <a href="/tags/draveness/" rel="tag"># draveness</a>
+          </div>
+
+        
+
+
+        
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          Table of Contents
+        </li>
+        <li class="sidebar-nav-overview">
+          Overview
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-3"><a class="nav-link" href="#1-%E5%88%9D%E5%A7%8B%E8%B0%83%E5%BA%A6%E5%99%A8-%C2%B7-v0-01-v2-4"><span class="nav-number">1.</span> <span class="nav-text">(1) 初始调度器 · v0.01 ~ v2.4</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Bu Gong</p>
+  <div class="site-description" itemprop="description">一个柔弱不能自理的女子</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">1</span>
+          <span class="site-state-item-name">posts</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">1</span>
+        <span class="site-state-item-name">categories</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">3</span>
+        <span class="site-state-item-name">tags</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Bu Gong</span>
+</div>
+  <div class="powered-by">Powered by <a href="https://hexo.io/" class="theme-link" rel="noopener" target="_blank">Hexo</a> & <a href="https://muse.theme-next.org/" class="theme-link" rel="noopener" target="_blank">NexT.Muse</a>
+  </div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/muse.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
