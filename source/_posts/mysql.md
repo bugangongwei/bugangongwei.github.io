@@ -66,4 +66,41 @@ binlog 和 redo log 不一样, 它是没有固定空间大小的, 只要有日�
 {% asset_img update语句执行过程.png update语句执行过程 %}
 
 
+# QA 
+1. 为什么 next-key 的前提条件是 RR 隔离级别?
+next-key = gap lock + row lock
+间隙锁的引入就是针对 RR 隔离级别下的 "幻读" 等问题而提出的;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
