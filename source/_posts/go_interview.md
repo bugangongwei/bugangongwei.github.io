@@ -17,7 +17,8 @@ context 的原理:
 拥有同一个上下文或拥有父子上下文的 Goroutine 会订阅同一个 ctx.Done() channel, 一旦接收到取消信号, 就会立即停止手中的工作;
 
 context 超时控制:
-ctx := context.WithTimeout(parentCtx, duration)
+context.WithTimeout(parent Context, timeout time.Duration)
+context.WithDeadline(parent Context, d time.Time)
 
 # GMP
 (1) Goroutine 如何调度
@@ -166,6 +167,67 @@ main/main.go:165:11: make([]*S, 2) does not escape
 (5) 内联树(inline tree), go build -gcflags "-d pctab=pctoinline" main.go 可以查看内联树, 内联树保存了函数调用的堆栈信息;
 
 
+## slice
+1. append
+````go
+func growslice(et *_type, old slice, cap int) slice {
+    // ……
+    newcap := old.cap
+    doublecap := newcap + newcap
+    if cap > doublecap {
+        newcap = cap
+    } else {
+        if old.len < 1024 {
+            newcap = doublecap
+        } else {
+            for newcap < cap {
+                newcap += newcap / 4
+            }
+        }
+    }
+    // ……
+
+    // 内存对齐, ptrSize 在 64 位系统中是 8 字节
+    // 如果需要分配的内存为 5*8, 那么对其内存分配中的 spanClass 的 size 应该是 48
+    // 48/8 = 6, 可以放 6 个指针, cap = 6
+    capmem = roundupsize(uintptr(newcap) * ptrSize)
+    newcap = int(capmem / ptrSize)
+}
+````
+
+````go
+func roundupsize(size uintptr) uintptr {
+    if size < _MaxSmallSize {
+        if size <= smallSizeMax-8 {
+            return uintptr(class_to_size[size_to_class8[(size+smallSizeDiv-1)/smallSizeDiv]])
+        } else {
+            //……
+        }
+    }
+    //……
+}
+
+const _MaxSmallSize = 32768
+const smallSizeMax = 1024
+const smallSizeDiv = 8
+
+var size_to_class8 = [smallSizeMax/smallSizeDiv + 1]uint8{0, 1, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20, 20, 20, 21, 21, 21, 21, 22, 22, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 25, 26, 26, 26, 26, 26, 26, 26, 26, 27, 27, 27, 27, 27, 27, 27, 27, 28, 28, 28, 28, 28, 28, 28, 28, 29, 29, 29, 29, 29, 29, 29, 29, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31}
+
+var class_to_size = [_NumSizeClasses]uint16{0, 8, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 480, 512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048, 2304, 2688, 3072, 3200, 3456, 4096, 4864, 5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728, 10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480, 21760, 24576, 27264, 28672, 32768}
+````
+
+# go 相对于其他语言的优势
+其他语言: nodejs python3.6
+(1) go routinue 轻量级并发, 并发量大, 并发性能高
+(2) python 中有两种编程模式, 一种是多线程+多进程, 一种是协程(历史包袱: 很多库都是用多线程+多进程开发的, 不支持协程)
+(3) go routinue 的“主死从随”是怎么做到的?
+(4) 闭包: 定义在一个函数内部的函数
+(5) 同样是 100w 个协程, python 占用内存少, go 写起来简单, 并且性能高
+(6) waitgroup 源码解析, 为什么 wg.Done() 少于 wg.Add(1) 之后, 会出现死锁, 而不是仅仅阻塞? 原来拿住一个锁并且永远堵塞不释放, 和互相等待对方释放锁的死锁方式一样, 都是一种类型的死锁, 总之就是锁等待且确定拿不到锁
+(7) go 语言中的锁: 互斥锁和读写锁
+(8) 进程中通信: 消息队列
+(9) go 中出现 deadlock 的场景: waitgroup, channel 空读和满写
+(10) 单向 channel 的使用场景: consumer(ch chan<- int), produce(ch <-ch int), 但是在调用 consumer 和 produce 的时候, 传入的参数可以是双向的 channel
 
 
 

@@ -1,0 +1,5 @@
+2021-09-01T11:06:31.621+0800  ERROR finished unary call with code Internal  {"cluster": "", "app_name": "", "release": "master-521f863e", "grpc.start_time": "2021-09-01T11:06:31+08:00", "system": "grpc", "span.kind": "server", "grpc.service": "kratos.KratosService", "grpc.method": "ChangeUserMobile", "user.update.gender": 0, "peer.address": "127.0.0.1:36842", "trace_id": "e998bafd7f20b1a976e9f94735a6536b", "span_id": "305d33936887dbe5", "user.update.profession": "", "error": "rpc error: code = Internal desc = 服务器开小差了", "grpc.code": "Internal", "grpc.time_ms": 28.558000564575195}
+
+
+
+
