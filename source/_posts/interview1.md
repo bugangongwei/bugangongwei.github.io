@@ -242,20 +242,147 @@ Redis6.0 主要针对网络 IO 瓶颈和多核计算机的特性, 允许在命�
 最好是联合索引(x,y,z), 首先查询 x=1, 然后根据有序的 y, 查找 y=2, 然后 z 在创建索引时已经有序了;
 
 ## 介绍一个做过的项目
+口语课搜索服务, 分为数据同步和搜索服务两个模块, 同步是指把 mysql 的数据, 同步到 ES 的过程, 是通过 CDC + kafka + ES bulk 来完成的; 搜索服务是 ES search + grpc 来完成的;
+
+CDC: Change Data Capture, 数据变化捕捉
+Mysql 的 CDC 实现方式
+(1) 侵入式(可能影响源数据库性能): 时间戳, 快照, 触发器
+(2) 非侵入式: 日志
+binlog CDC: log_bin=ON, binlog_format=ROW, binlog_row_image=FULL
+
+kafka 消费
+一个 consummer group 对应业务上 n 个 topics, 每个 topic 对应一个 partition 和一个 partition, 因为是 binlog, 所以最好是有序的;
+使用组件 Debezium 可以进行增量或全量的 capture, 支持 mysql, mongoDB, postgreSQL, Oracle 等数据库, 使用 Json 的数据格式;
+
+ES bulk_proccess:
+(1) 所有请求只需要加入到同一个 channel
+(2) worker 消费 channel 中的请求, 保存到自己的待处理请求数组中
+(3) 每次消费到一个请求, 放入数组后, 都要检查一下是否达到了 commit 的条件, 如果可以 commit 则调用 `POST /bulk` 命令
+(4) 如果没有处理完请求但是网络出现问题, 那么 bulk_process 会启动心跳检测, 每 5s 发送一个 3s 的心跳机制探测到可用的 node;
+(5) 发送失败可以使用 retry 机制, 默认是指数规避策略, 并且会把失败的 request 丢回数组中, 每隔指数级间隔时间再次 retry;
 
 ## 双端用户, 对用户和商户进行分库分表, 如果需要对数据进行聚合检索, 如何设计?
 
 ## kafka 模型
-Producer:
-Kafka:
-Zookeeper:
+Producer: 消息生产者, 负责生产消息并发送到 kafka 中, 双端队列;
+Kafka: 负责持久化消息, 包括分布式和备份机制, 保证吞吐量和数据安全性和可用性;
+Zookeeper: 负责注册发现, 元信息保存, 协调调度;
 ConsumerGroup: 
-Consumer: 
+(1) ConsumerGroup 在每一次消费的时候, 都会请求集群, 获取整个集群的状态信息, 包括 topics 信息, partitions 信息, brokers 以及 controller_id 等;
+(2) 从集群获取一个 coordinator 指派, 其实是一个 leader, 负责进行消费活动;
+(3) 异步监听 partitions 数目, 一旦 partitions 数量由更改, 退出当前消费, 下次消费的时候, 会 rebalance; 
+Consumer: 真正的消费者, 负责拉取 kafka 的数据;
+
+## kafka出现部分节点不可用, 如何设计兜底方案
+kafka 高可用使用冗余策略, 可以在多个 broker 上复制 partition 数据, 使用 leader-follower 机制, 一旦节点不可用, 如果是 follower 节点, 会因为太久没有同步消息到 zk 或者太久没有请求拉取 leader 内容而被 leader 从 ISR 列表中移除, 如果是 leader 节点, 那么会触发 leader 重新选举, 一旦 follower 发现 leader 无法通信, 那么就发送消息给到 zk, 谁先到达, 谁就被 zk 设置为 controller, controller 负责对 leader 进行重新选举, 它会从 leader 的 ISR 中轮询获取下一个 leader;
+
+## 线上接口超时了, 排查的思路?
+线上接口超时的一般原因:
+(1) CPU: 如果你的计算资源过大耗费太多 cpu, 被调度系统 throttled(节流), 那么你的请求将会被拒绝或者堵塞;
+(2) I/O: 如果你的服务调用了数据库, 文件写磁盘, 第三方服务等, 需要排查是否这些过程出现超时;
+
+(1) CPU
+通过一些监控可以查看 cpu 的使用情况, 如果监控中有明显的 cpu 问题, 那么可以暂时先调高对应 pod 的 cpu limit;
+注意: 监控系统并不是完全可靠的, 如果你的采样频率太稀疏, 而采集不到 Linux Schedule 的瞬间, 那么可能忽略掉这一块的问题, 这种问题不常出现;
+有种情况是报警只报某个 pod 或者某个集群, 而恰好这个集群的 cpu limit/cpu request 设置和别的集群不一样, 这样也比较好排查;
+
+(2) I/O
+通过 hunter, opentracing 等工具, 可以可视化地查看请求各个阶段的时间消耗, 定位问题所在的大致范围;
+第三方服务调用: 询问第三方对应接口的响应时间, 从而定位是网络问题还是服务本身问题;
+Mysql, Redis: 满查询日志, 如果不是查询语句本身的问题, 那么是不是网络问题, 组件问题?
+其他: 了解服务超时机制, 寻找可能的 bug;
+
+如果工具不好用, 只能通过手打日志了;
+
+### grpc 超时机制
+Client 设置 deadline 之后, Server 会取出剩余 deadline 重新设置自己的 context cancel;
+(1) 网络正常情况下, Client 检测到超时, 通过发送 rst 信号(grpc 使用 http2 协议, 可以并发传输)通知 Server 端 cancel;
+(2) 网络不通的情况下, Server 自己 cancel;
+
+# 币安 1
+## Golang 优雅退出
+使用 System SIGNAL 机制, Golang 提供 os/signal 包, 提供 signal.Notify(chan, os.Signal...) 方法监听特定信号, signal.Stop 来取消监听;
+
+## MySQL什么时候会锁表
+(1) myisam: 锁表
+(2) innodb: 不通过索引访问数据, 锁表扫描; 
+insert 会加 insert intention 锁, 与间隙锁冲突;
+insert 会加 autoincremant 锁, 获取自增主键;
+想要 lock in share mode 的锁, 会先加 IS 锁, 表明想要争抢共享锁, 与互斥锁冲突;
+想要 for update 的锁, 会先加 IX 锁, 表明要争抢排它锁, 与共享锁冲突;
+
+## 简单介绍 ACID
+A(Atomic): 事务要么成功要么失败, 通过 undolog 实现;
+C(Consistency): 事务执行前后的数据保持一致状态, 事务的存在并不影响数据库本身的状态和逻辑;
+I(Isolation): 事务与事务之间互相不受影响, MVCC + 锁;
+D(Duration): 事务作出的修改是持久化的;
+
+## Mysql 隔离级别
+读为提交, 读已提交, 可重复读, 穿行化
+要考虑的问题, 脏读, 不可重复读, 幻读;
+
+## 索引失效的情况
+(1) 联合索引中违反最左前缀
+(2) !, <> 查询, 其实就是非等值查询
+(3) Group By 和 Order By 字段非索引字段, 会使用 using temporary 和 using filesort
+(4) 函数计算, 包括类型转换
+(5) 范围查询后面的查询
+(6) like 查询
+(7) or 查询
+
+## Golang CAS
+sync/atomic 包, atomic.CompareAndSwapInt32(&v, old, new)
+
+# 币安 2
+## Golang GC 算法
+(1) 三色标记的具体过程
+三色: 初始-白色, 中间-灰色, 最终-黑色
+一开始所有对象都是白色, 存入白色对象集合, 然后遍历跟对象, 置为灰色, 放入灰色集合, 然后从集合中取灰色对象, 通过对象引用继续遍历, 把遍历到的对象置为灰色, 放入灰色队列, 把取出的对象置为黑色, 放入黑色对象集合, 直到灰色集合为空;
+(2) 混合写屏障
+问题:
+写屏障是用来解决这样一类问题, 在标记阶段, 不进行 STW 操作, 那么, 对象的引用会动态地更改, 要注意的是, 黑色对象不会被遍历了, 所以, 黑色对象如果后来重新指向另一个白色的对象, 那么这个白色的对象没有机会被遍历到, 就算它是需要的对象, 也会被误清除;
+
+解决思路:
+如何解决这个问题? 一种是坚决不让黑色对象指向白色对象(强三色不变形), 一种是可以指向白色对象, 但是这个白色对象, 一定要有被标记的机会, 也就是有灰色对象在它的前置路径上(弱三色不变型);
 
 
+具体方案:
+插入写屏障: 黑色对象指向的下游对象一定置为灰色;
+删除写屏障: 黑色对象指向的下游对象, 看它如果已经有了灰色对象为上游, 就不用多管闲事, 直接指向, 否则置为灰色; 删除引用时, 把下游对象置为灰色;
+混合写屏障: 为了栈的性能, 写屏障技术并不在栈上展开; 垃圾清除只在堆上进行, 所以, 最后为了不让一些被栈对象引用的堆对象被误删除, 需要再次扫描一次栈, 而且需要 STW, 为了免除这次 STW, 混合写屏障一开始就把栈对象全部置为黑色, 新添加的对象也变成黑色, 最后都是黑色, 就不需要扫描了; 但是这需要前面两种写屏障技术的共同加持;
 
+(3) 为什么使用三色标记法
+STW 的标记清除法, 太浪费时间了
 
+(4) Golang 垃圾清除算法的演进
+1.5 引入三色标记法, 大大减少 STW 的时间; 1.8 引入混合写屏障, 去除了栈扫描 STW 的时间;
 
+## GMP
+(1) Golang GMP 模型的演进
+< 1.1 GM 模型
+1.1 引入 P 和任务窃取式调度
+1.2 引入抢占式调度器
+
+(2) 详细描述 GMP 模型
+GMP 模型三个要素, Goroutine, Machine 和 Process 以及一个调度器 sched, sched 维护了一个全局的 runq, 每个 P 又维护了自己的 runq, P 是 Golang 用户空间的处理器, 需要内核处理器 M 才能执行程序, 所以一个 P 一定要绑定一个 M 才能运行; 而 M 真正运行的是 G, P 负责调度 G 给到 M, 让 M 可以有 G 可用;
+
+## Goroutine 触发调度时机
+(1) 初始化 `_rto_go` -> mstart(SB) -> schedule();
+(2) 阻塞: channel 阻塞, 系统调用阻塞
+Channel 阻塞: Channel 阻塞的时候, G 与当前 M, P 解绑, 构造一个 sudog 结构体, 写入 Channel 的阻塞队列中, 状态变为 Gwaiting, 等待 Channel 唤醒;
+阻塞式系统调用: 当某个G由于系统调用陷入内核态时，该P就会脱离当前的M，此时P会更新自己的状态为Psyscall，M与G互相绑定，进行系统调用。结束以后若该P状态还是Psyscall，则直接关联该M和G，否则使用闲置的处理器处理该G;
+(3) 调度: 抢占式调度(协作, 信号), 时间片调度(sysmon)
+sysmon 系统监控: 基于时间片的抢占式调度, 每个 G 运行不超过 10ms, 一旦超过, 就会调用 retake 函数, 触发新的调度;
+主动挂起: 基于协作的抢占式调度, 会在每个函数运行前判断运行时间是否超过设定值, 如果已经超过了, 则调用 gopark 函数主动挂起这个 G, 触发新的调度;
+信号抢占: 基于信号的抢占式调度, Grunning 的 G 发现自己的抢占信号变为 true 就会调用 preemtptpark 挂起自己并触发新的调度;
+
+## Go 内存分配器
+### 线性分配器/空闲链表
+首次适应, 循环首次适应, 最适应, 隔离策略(16B, 32KB)
+### TCMalloc(Thread Caching Malloc)
+多级缓存 mcache, mcentral, mheap
+### 对象分类
+16B, 32KB
 
 
 

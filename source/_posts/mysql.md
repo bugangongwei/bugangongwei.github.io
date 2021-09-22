@@ -72,18 +72,102 @@ next-key = gap lock + row lock
 间隙锁的引入就是针对 RR 隔离级别下的 "幻读" 等问题而提出的;
 
 
+# CDC
+log_bin=ON, binlog_format=ROW, binlog_row_image=FULL
+binlog_format 分为 ROW, STATEMENT 和 MIXED, ROW 记录每一条 SQL 语句; STATEMENT 记录每一行数据; MIXED 是两者的结合;
+binlog_row_image 分为 FULL 和 Minimal, FULL 展示所有列的值, Minimal 只展示变化的列的值;
 
+binlog_format=ROW, binlog_row_image=FULL:
+````binlog
+#200702 11:26:00 server id 1  end_log_pos 2647 CRC32 0x59777bf5     Delete_rows: table id 120 flags: STMT_END_F
 
+BINLOG '
+yFP9XhMBAAAAOQAAACcKAAAAAHgAAAAAAAEABHRlc3QAC2JpbmxvZ19kZW1vAAMDAxEBAAIaymaN
+yFP9XiABAAAAMAAAAFcKAAAAAHgAAAAAAAEAAgAD//gEAAAABAAAAF7/VgD1e3dZ
+'/*!*/;
+### DELETE FROM `test`.`binlog_demo`
+### WHERE
+###   @1=4 /* INT meta=0 nullable=0 is_null=0 */
+###   @2=4 /* INT meta=0 nullable=1 is_null=0 */
+###   @3=1593792000 /* TIMESTAMP(0) meta=0 nullable=0 is_null=0 */
+# at 2647
+````
 
+binlog_format=ROW, binlog_row_image=MINIMAL
+````binlog
+#200702 11:26:00 server id 1  end_log_pos 2647 CRC32 0x59777bf5     Delete_rows: table id 120 flags: STMT_END_F
 
+BINLOG '
+yFP9XhMBAAAAOQAAACcKAAAAAHgAAAAAAAEABHRlc3QAC2JpbmxvZ19kZW1vAAMDAxEBAAIaymaN
+yFP9XiABAAAAMAAAAFcKAAAAAHgAAAAAAAEAAgAD//gEAAAABAAAAF7/VgD1e3dZ
+'/*!*/;
+### DELETE FROM `test`.`binlog_demo`
+### WHERE
+###   @1=4 /* INT meta=0 nullable=0 is_null=0 */
+# at 2647
+````
 
+STATEMENT:
+````binlog
+#200702 11:58:33 server id 1  end_log_pos 2961 CRC32 0x48d934c7     Query    thread_id=10    exec_time=0    error_code=0
+use `test`/*!*/;
+SET TIMESTAMP=1593662313/*!*/;
+insert into binlog_demo values(6,66,'2020-07-06')
+/*!*/;
+# at 2961
+````
 
+备注:
+server id 用来唯一标识 Mysql Server 主机, 在双主模式下, 可以防止 bin_log 循环复制问题;
+SET TIMESTAMP=1593662313 是 STATEMENT 模式下的上下文信息, 比如使用 now() 函数的时候, 由于主从主机时间可能不一致, 需要这个 TIMESTAMP 来一致化时间;
 
+ROW 模式: 优势是没有歧义, 每一行都很清楚地表达; 劣势是数据量可能比较大, 比如批量删除数据, 就需要记录很多行记录;
+STATEMENT 模式: 优势是只需要记录 SQL 语句, 行数相对 ROW 模式少很多; 劣势是执行入 DELETE...limit n 等语句是, 可能由于主从选择的索引不一致导致最终结果不一致;
+````
+mysql> select * from binlog_demo;
++----+----+---------------------+
+| id | a  | t_modified          |
++----+----+---------------------+
+|  1 |  1 | 2020-07-01 00:00:00 |
+|  2 |  2 | 2020-07-02 00:00:00 |
+|  3 |  3 | 2020-07-02 00:00:00 |
+|  5 |  5 | 2020-07-05 00:00:00 |
+|  6 | 66 | 2020-06-01 00:00:00 |
++----+----+---------------------+
 
+-- 使用索引 a
+mysql> select * from binlog_demo   where a>=4 and t_modified<='2020-07-10' limit 1;
++----+---+---------------------+
+| id | a | t_modified          |
++----+---+---------------------+
+|  5 | 5 | 2020-07-05 00:00:00 |
++----+---+---------------------+
 
+-- 使用索引 b
+mysql> select * from binlog_demo use index(t_modified)  where a>=4 and t_modified<='2020-07-10' limit 1;
++----+----+---------------------+
+| id | a  | t_modified          |
++----+----+---------------------+
+|  6 | 66 | 2020-06-01 00:00:00 |
++----+----+---------------------+
+````
+MIXED: 两种方式的结合, Mysql 自动判断使用 ROW 还是 STATEMENT;
 
+为什么现在 Mysql 默认使用 ROW 模式?
+(1) 就缺点而言, 目前的大数据背景下, 硬件已经变得成本不算太高, 所以浪费空间也变得可以接受;
+(2) 就优点而言, ROW 模式对 update, delete 和 insert 都有很好的回滚策略, 因为它记录了变化前和变化后的数据, 非常精确, 不用过于关心不一致的问题;
 
+# redolog binlog 两阶段提交
+(1) 执行器想要更新记录 A
+(2) 查找记录 A, 如果 A 已经在 buffer pool 中, 直接从 buffer pool 取, 否则 InnoDB 从磁盘中夹在记录 A 到 buffer pool;
+(3) 将记录 A 的旧值写入 undolog, 便于回滚;
+(4) 在 buffer pool 中更新记录 A, 此时该页变成脏页;
+(5) 执行器写 redolog 并标记为 prepare 状态;
+(6) 执行器写 binlog 文件;
+(7) 执行器写 redolog 并标记为 commit 状态, 事务 commit;
+如果 innodb_flush_log_at_tx_commit=1, 会在每次 commit 时持久化 redolog 到磁盘; 如果 sync_binlog=1, 会在每次 commit 时持久化 binlog 到磁盘;
 
+如何判断 binlog 和 redolog 是否一致? 通过 redolog 和 binlog 中记录的 XID, 也就是事务 ID;
 
 
 

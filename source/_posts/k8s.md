@@ -20,7 +20,10 @@ container 具有以下特点:
 (3) 在被宿主机操作系统限制了存储空间，让这个进程认为宿主机的某个目录就是系统根目录（rootfs）
 这几个欺骗进程的技术，就是是容器技术的三板斧，用于资源隔离的namespace，用于资源限制的cgroup,以及用于伪装进程根目录的rootfs。这三种技术，都是是早已存在于linux中的，只是docker公司比较创新的把这三种技术整合在一起，并且，提出了容器镜像及镜像仓库等概念，把这个进程及相关的依赖环境都一起打包成可分发及重复使用的镜像文件，方便容器能在不同机器之间移植。这样，在任何地方，只要能运行docker，就能把容器镜像跑成一个包含这应用进程及相关依赖环境的容器实例。
 
+# userspace/iptables/IPVS
+userspace 和 iptables 都依赖于内核的 iptables , 不同的是, userspace 是先 -> iptables -> kube-proxy -> pod, 而 iptables 是 -> iptables -> pod, kube-proxy 负责生成 iptables 规则, 不负责流量转发;
 
+IPVS 是内核的一个组件, 和 iptables 一样使用 netfilter , 不过底层数据结构使用 hash 表, 比 iptables 性能更好; 支持更过的负载均衡策略, 支持四层协议, 支持会话保持;
 
 # 集群内访问
 在集群内, client_pod 需要访问 server_pod, 会怎么做呢?

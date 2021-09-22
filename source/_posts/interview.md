@@ -8,21 +8,6 @@ comments: true
 
 
 # 业务
-## 简历
-负责口语课模块的维护和重构
-口语课因为普及度高, 受众范围广, 成为公司的核心课程, 面向 80% 的活跃用户, 所以对用户体验有很高的要求;
-配合数据组完成了 mongodb 定时备份;
-对用户学习记录单表进行分库分表消除大表隐患;
-给口语课 DB 增加缓存, 提高响应速度;
-
-负责精细化运营系统资源管理模块的迭代
-资源管理负责对广告, 弹窗, 推荐课等资源的后台管理和 C 端内容提供, 使用 mysql 进行资源存储, redis 进行缓存;
-通过缓存自动更新策略预防缓存中可能会发生的缓存雪崩, 缓存穿透和缓存击穿等问题;
-通过 pprof 分析定位内存泄漏问题并通过 LRU map 解决;
-
-负责创新项目第一期的业务迭代
-完成了用户注册登陆模块, 后台内容管理系统, 以及课程内容录入模块的开发;
-
 ## 技能回顾
 TODO:
 golang 面试题练习
@@ -292,6 +277,134 @@ undo log 只针对 UPDATE 和 DELETE
 3. list: 先入先出, lpush/lpop/rpush/rpop/llen
 4. set: 无重复元素, sadd/scard(元素个数)/sismember(元素是否存在)/srem(删除某个元素)
 5. zset: sorted set, zadd/zcard/zrange
+
+
+|| 组件 || 分片算法 || 重分片 || 复制集 || Leader 选举机制 || 索引方式 || 事务 ||
+| Redis 
+| 槽指派, 16384个槽全部指派完成集群才上线 
+| online行为, 添加和删除时, 指定槽转移到别的节点上去 
+| 复制集
+2.8 以前, 只有 SYNC;
+2.8 以后, PSYNC 1, PSYNC + 复制积压缓冲区 + server ID;
+4.0 之后, PYSNC 2, PSYNC + 复制积压缓冲区 + replid1 + replid2, replid1 保存当前复制的 master 的 replid, 而 replid2 只在 slave 上升到 master 时才使用, 保存自己的 server id 
+| Sentinel 选举 Leader, Raft 协议; 从服务器选举 master, 从可靠的从服务器列表中, 按照优先级+偏移量+serverId的排序选择新的 master 
+| 没有索引 
+| 原子性: 命令在一个队列中, 要么都执行, 要么都不执行;
+一致性: 命令入队期间检查语句, 命令执行期间仅返回错误, 没有回滚;
+隔离性: 单线程, 隔离性完全满足;
+持久性: 取决于 Redis 的持久化机制;
+| Mysql 
+| 分库分表 
+| 重新分库分表
+| master-slave
+binlog + 三个线程(dump_thread, I/O thread, sql_thread) 
+| change master + 位点 或者 GTID(serverID + transactionID) 
+| B+ 树 
+| 原子性: 通过 undo log 实现事务回滚;
+一致性: 类型检查等;
+隔离性: 锁机制+MVCC(RR隔离级别下);
+持久化: Redo log, bin log, 两阶段提交
+| MomgoDB 
+| Range/Hash/Zone/分片键
+| MongoDB 分片是分成一个个默认 64M 大小的 chunk, 然后 chunk 大于指定大小时, 组件 balancer 会对 chunk 转移 
+| 副本集
+local.oplog.rs(容量到达上线会删除旧数据, oplog 的幂等性)
+| 和 Redis 差不多, 筛选可用的 Secondry + 优先级 + 最新 oplog 
+| B 树 
+| 
+| ElasticSearch
+| 按照文档 ID 进行 hash 
+| 重新计算分片
+| Bully 算法, 发现 leader 宕机后即告诉编号比自己大的节点, 让他们去选举编号最大的节点作为新的 leader
+| 倒排索引
+| - |
+
+
+
+
+
+
+# 介绍自己的项目
+## 定时加载内容
+(1) 同步加载
+获取表数据最近修改时间
+show table status like table_name;
+select update_time from information_schama where TABLE_SCHEMA = table_name;
+判断是否版本更新, 如果更新, update 数据;
+更新本地版本号
+
+(2) 定时加载
+select + ticker
+select 的优先级:
+select 只要有一个 case 能够满足, 就立即执行;
+select 同时有多个 case 能满足, 则随机选择一个 case 执行;
+当所有 case 都不能满足时, 如果有 default 就执行 default, 否则阻塞监听;
+
+## 分库分表
+(1) 设计分库分表数
+根据目前的表行数, 表 size, 表月增长量, 以及 DBA 给出的最佳实践(table_nums<1w, rows<500w, table_size<20G), 设计分库数量和分表数量;
+设计分表规则: 查询按照 user_id 和 course_id 来, 那么, 使用 user_id 作为分表规则的 key, 做 hash 运算;
+创建新库和空表;
+
+为什么不用一致性 hash?
+因为表和库的设计已经预留了十年的增长, 不太会有表的个数增减的场景, 普通的 hash 就可以满足;
+
+(2) 历史数据同步脚本
+设置一个截止 id, 叫做 idx, 设置 step 为一个 worker 处理的 rows 个数, 以及一个 worker_num;
+开始多个唯一 worker, 按照 step 划分 id 范围, 根据范围读取源数据, 并写入新表;
+
+(3) 增量数据同步脚本
+开始消费 CDC 数据, 设置 initialOffset 为 Oldest, 因为在历史数据同步开启之后, 还是有一些 CDC 数据产生, 需要处理这些数据变更;
+消费到插入数据类型, 判断 id 是否大于历史数据同步时设置的戒指 id, 如果不大于, 就不插入, 否则会报 Duplicated Entry 的错误;
+消费到更新数据类型, 直接更新, 就算更新 rows 为 0 也不报错, 因为 CDC 开启时间比历史数据同步早, 会有已经更新的数据在新的库里;
+表设计是软删, 所以没有删除数据类型的考虑; (因为用户数据还需要保留, 用户重新添加课程后可以看到之前学习的记录)
+
+(4) 同步基本完成后, 业务切换到新库新表, 直到 CDC 完全没有内容后, 可以停掉 CDC
+
+## 搜索服务
+Mysql 设置 bin_log 式的 CDC: log_bin=ON, binlog_format=ROW, binlog_row_image=FULL
+读取 binlog 并生产 kafka 消息: Debezium, 一个监控数据变化的组件, 基于 kafka, 可支持 SQL, MongoDB, Oracle 等组件;
+kafka 配置: CDC 需要保证顺序, 所以 kafka 只有一个 partition;
+消费者: 对该 topic 只开启一个 consumer, 保证顺序消费, 因为 kafka 的消费是按照 pull 的方式来的, 所以消费速率由消费者决定;
+
+ElasticSearch 面试点:
+(1) 简要介绍一下 ES
+ElasticSearch 是一款基于 lucene 的开源搜索引擎, 通过把强大但是不太好使用的 lucene 进行包装, 暴露出易于操作的 RESTful 风格的 API, 让这款搜索引擎更容易被开发者使用;
+ES 通常用在垂直搜索领域中, 提供领域数据的模糊搜索功能; 分别有几个关键的概念 index, document, field, mapping, DSL 和 SQL, 代表的数据的组织和架构形式; ES 和 redis 一样提供了支持海量数据和高可用的分片式集群和复制集功能, 通过计算 document_id 的 hash 值来映射不同的分片, 通过 snapshot API 进行数据备份;
+
+## 口语课接 CMCC
+.course 文件通过 git 提交到仓库, 然后通过 CI 跑脚本, upload 到 OSS, 然后后端服务从 OSS 加载课程提供给客户端使用;
+在 upload 之前, 因为是 .course 的文件, 是自然人理解的文件类型, 需要按照设定的规则进行语法和词法的分析, 将 .course 文件, 构造成一棵 Node Tree;
+通过对不同的课程定义不同的 PB 结构, 在解析程序中, 对每种课程类型, 都定义自己的 Encode 和 Decode 函数, 可以将 Node Tree 序列化为 PB 数据, 通过 GRPC 提供给其他端;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
