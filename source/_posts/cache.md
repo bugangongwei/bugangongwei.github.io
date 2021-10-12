@@ -23,6 +23,7 @@ comments: true
 同一个请求, 缓存过期时请求量太大, 对源服务造成很大的压力
 (1) 写缓存时, 分布式锁
 (2) 热点数据永不过期
+(3) 互斥锁+内存缓存(singleflight.Group 实现了这样的功能)
 
 # cacheloader
 1. 在 cachelocader 中, 缓存自动更新组件

@@ -287,4 +287,15 @@ select, epoll, evport, kqueue, 优先级 evport(Solaries 10) > epoll(Linux) > kq
 (1) 数据持久化
 (2) 丰富的数据结构和特性
 
+## Redis 回收策略
+(1) volatile-lru: 设置过期的键, 选择 lru
+(2) volatile-ttl: 设置过期的键, 选择过期键
+(3) volatile-random: 设置过期的键, 任意选择一个
+(4) allkeys-lru: 未设置过期的键, 选择 lru
+(5) allkeys-random: 未设置过期的键, 任意选择
+(6) no-enviction: 不回收
+
+规则: 如果数据幂律分布, 选择 lru, 如果是平等分布, 选择 random;
+
+
 

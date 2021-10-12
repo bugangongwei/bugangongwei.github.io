@@ -59,7 +59,7 @@ Load:
 Store: 
 (1) m.read 有 key, 则只要不是 expunged 的状态, 就用 CAS 原子更新;
 (2) 如果 entry 是 expunged 状态, 先删除, 再更新 m.dirty;
-(3) 如果 m.ready 没有, 但 m.dirty 有的, 则直接更新 m.dirty;
+(3) 如果 m.ready 没有, 但 m.dirty 有的, 则直接更新 m.dirty; 
 (4) 剩下的情况, 直接插入 m.dirty;
 
 Delete:
@@ -85,7 +85,7 @@ channel.closed = 1, 把所有的 recvq 和 sendq 中的 g 加入到新结构 gli
 
 ## 给已经关闭的 channel 进行读写会发生什么
 写: 直接 panic
-读: 如果缓冲区没有值了, 就直接返回; 如果缓冲区还有值, chanrecv 继续往下走, 先取阻塞队列(channel 关闭会清空阻塞队列, 所以这一步基本跳过), 再取缓冲区, 读到数据;
+读: 可以直接读数据, 如果没数据了会返回 nil, 不过 ok 的值都会是 false;
 
 # 内存分配
 go 语言的内存分配使用了多级缓存+空闲链表分配+二维稀疏矩阵
@@ -215,6 +215,11 @@ var size_to_class8 = [smallSizeMax/smallSizeDiv + 1]uint8{0, 1, 2, 3, 3, 4, 4, 5
 
 var class_to_size = [_NumSizeClasses]uint16{0, 8, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 480, 512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048, 2304, 2688, 3072, 3200, 3456, 4096, 4864, 5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728, 10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480, 21760, 24576, 27264, 28672, 32768}
 ````
+
+## Slice 并发安全
+slice append 的时候, 每个 goroutine 都拿到 slice, 然后创建新的底层数组写回, 这里面会有并发覆盖问题
+(1) 加互斥锁 mutex
+(2) 使用 channel 进行 append, 所有想要 append 的 goroutine 都先写数据到 channel, channel 接受到数据才 append
 
 # go 相对于其他语言的优势
 其他语言: nodejs python3.6
